@@ -1295,6 +1295,7 @@ struct CachedExecutableDigest {
     stamp: [u64; 10],
     digest: ExecutableDigest,
     observed: bool,
+    settled: bool,
 }
 
 #[cfg(unix)]
@@ -1359,6 +1360,7 @@ impl ImportedExecutableVerification {
             }
             if let Some(cached) = self.digests.get_mut(path)
                 && cached.stamp == stamp
+                && cached.settled
             {
                 cached.observed = true;
                 return Ok(cached.digest.clone());
@@ -1395,14 +1397,23 @@ impl ImportedExecutableVerification {
             sha256: format!("{:x}", sha2::Digest::finalize(hash)),
         };
         #[cfg(unix)]
-        self.digests.insert(
-            path.to_path_buf(),
-            CachedExecutableDigest {
-                stamp: executable_file_stamp(&before),
-                digest: digest.clone(),
-                observed: true,
-            },
-        );
+        {
+            use std::os::unix::fs::MetadataExt;
+            let changed_ns =
+                i128::from(before.ctime()) * 1_000_000_000 + i128::from(before.ctime_nsec());
+            let settled = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .is_ok_and(|now| now.as_nanos() as i128 - changed_ns >= 1_000_000_000);
+            self.digests.insert(
+                path.to_path_buf(),
+                CachedExecutableDigest {
+                    stamp: executable_file_stamp(&before),
+                    digest: digest.clone(),
+                    observed: true,
+                    settled,
+                },
+            );
+        }
         Ok(digest)
     }
 }
